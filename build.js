@@ -1,8 +1,9 @@
 /* eslint-disable no-console */
 /* eslint-disable @typescript-eslint/no-var-requires */
 /* eslint-disable no-undef */
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 const { readdirSync, existsSync } = require("fs");
+const { rm, mkdir, copyFile } = require("fs/promises");
 
 const getDirectories = (source) =>
   readdirSync(source, { withFileTypes: true })
@@ -10,13 +11,14 @@ const getDirectories = (source) =>
     .map((dirent) => dirent.name);
 
 /**
- * Executes a shell command and return it as a Promise.
- * @param cmd {string}
+ * Executes a program with arguments and return it as a Promise.
+ * @param file {string}
+ * @param args {string[]}
  * @return {Promise<string>}
  */
-function execAsync(cmd) {
+function execAsync(file, args) {
   return new Promise((resolve, reject) => {
-    exec(cmd, (error, stdout, stderr) => {
+    execFile(file, args, (error, stdout, stderr) => {
       if (error) {
         reject(error);
       } else {
@@ -31,8 +33,8 @@ async function build() {
   console.log("Clean previous build…");
 
   await Promise.all([
-    execAsync("rm -rf ./build/server"),
-    execAsync("rm -rf ./build/plugins"),
+    rm("./build/server", { recursive: true, force: true }),
+    rm("./build/plugins", { recursive: true, force: true }),
   ]);
 
   const d = getDirectories("./plugins");
@@ -40,27 +42,19 @@ async function build() {
   // Compile server and shared
   console.log("Compiling…");
   await Promise.all([
-    execAsync(
-      "yarn babel --extensions .ts,.tsx --quiet -d ./build/server ./server"
-    ),
-    execAsync(
-      "yarn babel --extensions .ts,.tsx --quiet -d ./build/shared ./shared"
-    ),
+    execAsync(process.execPath, [require.resolve("@babel/cli/bin/babel.js"), "--extensions", ".ts,.tsx", "--quiet", "-d", "./build/server", "./server"]),
+    execAsync(process.execPath, [require.resolve("@babel/cli/bin/babel.js"), "--extensions", ".ts,.tsx", "--quiet", "-d", "./build/shared", "./shared"]),
     ...d.map(async (plugin) => {
       const hasServer = existsSync(`./plugins/${plugin}/server`);
 
       if (hasServer) {
-        await execAsync(
-          `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/server" "./plugins/${plugin}/server"`
-        );
+        await execAsync(process.execPath, [require.resolve("@babel/cli/bin/babel.js"), "--extensions", ".ts,.tsx", "--quiet", "-d", `./build/plugins/${plugin}/server`, `./plugins/${plugin}/server`]);
       }
 
       const hasShared = existsSync(`./plugins/${plugin}/shared`);
 
       if (hasShared) {
-        await execAsync(
-          `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/shared" "./plugins/${plugin}/shared"`
-        );
+        await execAsync(process.execPath, [require.resolve("@babel/cli/bin/babel.js"), "--extensions", ".ts,.tsx", "--quiet", "-d", `./build/plugins/${plugin}/shared`, `./plugins/${plugin}/shared`]);
       }
     }),
   ]);
@@ -68,21 +62,18 @@ async function build() {
   // Copy static files
   console.log("Copying static files…");
   await Promise.all([
-    execAsync(
-      "cp ./server/collaboration/Procfile ./build/server/collaboration/Procfile"
-    ),
-    execAsync(
-      "cp ./server/static/error.dev.html ./build/server/error.dev.html"
-    ),
-    execAsync(
-      "cp ./server/static/error.prod.html ./build/server/error.prod.html"
-    ),
-    execAsync("cp package.json ./build"),
-    ...d.map(async (plugin) =>
-      execAsync(
-        `mkdir -p ./build/plugins/${plugin} && cp ./plugins/${plugin}/plugin.json ./build/plugins/${plugin}/plugin.json 2>/dev/null || :`
-      )
-    ),
+    copyFile("./server/collaboration/Procfile", "./build/server/collaboration/Procfile"),
+    copyFile("./server/static/error.dev.html", "./build/server/error.dev.html"),
+    copyFile("./server/static/error.prod.html", "./build/server/error.prod.html"),
+    copyFile("package.json", "./build/package.json"),
+    ...d.map(async (plugin) => {
+      try {
+        await mkdir(`./build/plugins/${plugin}`, { recursive: true });
+        await copyFile(`./plugins/${plugin}/plugin.json`, `./build/plugins/${plugin}/plugin.json`);
+      } catch {
+        // Preserve optional plugin-manifest copy behavior.
+      }
+    }),
   ]);
 
   console.log("Done!");
